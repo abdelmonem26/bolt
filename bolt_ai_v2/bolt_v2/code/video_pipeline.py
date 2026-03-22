@@ -112,6 +112,154 @@ def synthesize_voice(script, content_id, config):
         if r: return r, provider
     logger.error("All voice providers failed"); return None, None
 
+# ── AVATAR TIER 0: HeyGen (paid upgrade, best lip sync) ──
+# Pre-plan: "HeyGen at $29/month offers the best lip sync quality and the
+# most natural-looking results. The upgrade is justified when the channel
+# reaches the point where production quality is the limiting factor on growth."
+
+def create_heygen_video(audio_path, content_id, config):
+    """HeyGen avatar generation (paid tier -- $29/month).
+
+    Returns path to generated avatar video, or None if not configured.
+    """
+    key = config["apis"].get("heygen_api_key", "")
+    if not key or key.startswith("YOUR_"):
+        return None
+
+    avatar_id = config["apis"].get("heygen_avatar_id", "")
+    if not avatar_id:
+        logger.debug("HeyGen avatar_id not configured")
+        return None
+
+    try:
+        out_dir = Path(config["paths"]["video"])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{content_id}_heygen.mp4"
+
+        # Step 1: Create video generation task
+        resp = requests.post(
+            "https://api.heygen.com/v2/video/generate",
+            headers={"X-Api-Key": key, "Content-Type": "application/json"},
+            json={
+                "video_inputs": [{
+                    "character": {"type": "avatar", "avatar_id": avatar_id},
+                    "voice": {"type": "audio", "audio_url": str(audio_path)},
+                }],
+                "dimension": {"width": 1080, "height": 1920},
+            },
+            timeout=30,
+        )
+        if not resp.ok:
+            logger.warning(f"HeyGen create failed: {resp.status_code}")
+            return None
+
+        video_id = resp.json().get("data", {}).get("video_id")
+        if not video_id:
+            return None
+
+        # Step 2: Poll for completion (max 5 minutes)
+        import time
+        for _ in range(30):
+            time.sleep(10)
+            status_resp = requests.get(
+                f"https://api.heygen.com/v1/video_status.get?video_id={video_id}",
+                headers={"X-Api-Key": key},
+                timeout=15,
+            )
+            if status_resp.ok:
+                data = status_resp.json().get("data", {})
+                if data.get("status") == "completed":
+                    video_url = data.get("video_url")
+                    if video_url:
+                        dl = requests.get(video_url, timeout=120)
+                        out_path.write_bytes(dl.content)
+                        logger.info(f"HeyGen avatar OK: {out_path.name}")
+                        return str(out_path)
+                elif data.get("status") == "failed":
+                    logger.warning("HeyGen generation failed")
+                    return None
+
+        logger.warning("HeyGen timeout after 5 minutes")
+        return None
+    except Exception as e:
+        logger.warning(f"HeyGen error: {e}")
+        return None
+
+
+# ── B-ROLL: Kling AI (free daily credits) ──
+# Pre-plan Section 7: "Kling AI refreshes free credits daily, making it
+# effectively unlimited for background clips. Used for tech-themed visuals
+# -- circuit boards, data flows, abstract AI imagery."
+
+def generate_broll_clip(prompt, content_id, config):
+    """Generate a background video clip using Kling AI.
+
+    Args:
+        prompt: Text description of desired visual (e.g. "futuristic circuit board").
+        content_id: For naming the output file.
+        config: Full config dict.
+
+    Returns:
+        Path to generated clip, or None if not available.
+    """
+    key = config["apis"].get("kling_api_key", "")
+    if not key or key.startswith("YOUR_"):
+        logger.debug("Kling AI not configured -- skipping B-roll")
+        return None
+
+    try:
+        out_dir = Path(config["paths"]["video"])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{content_id}_broll.mp4"
+
+        # Kling AI video generation API
+        resp = requests.post(
+            "https://api.klingai.com/v1/videos/text2video",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={
+                "prompt": prompt,
+                "duration": "5",  # 5 seconds
+                "aspect_ratio": "9:16",
+            },
+            timeout=30,
+        )
+        if not resp.ok:
+            logger.warning(f"Kling AI create failed: {resp.status_code}")
+            return None
+
+        task_id = resp.json().get("data", {}).get("task_id")
+        if not task_id:
+            return None
+
+        # Poll for completion
+        import time
+        for _ in range(24):  # 2 minutes max
+            time.sleep(5)
+            status_resp = requests.get(
+                f"https://api.klingai.com/v1/videos/text2video/{task_id}",
+                headers={"Authorization": f"Bearer {key}"},
+                timeout=15,
+            )
+            if status_resp.ok:
+                data = status_resp.json().get("data", {})
+                if data.get("status") == "completed":
+                    video_url = data.get("video_url") or (data.get("videos", [{}])[0].get("url"))
+                    if video_url:
+                        dl = requests.get(video_url, timeout=60)
+                        out_path.write_bytes(dl.content)
+                        logger.info(f"Kling AI B-roll OK: {out_path.name}")
+                        return str(out_path)
+                elif data.get("status") == "failed":
+                    logger.warning("Kling AI generation failed")
+                    return None
+
+        logger.warning("Kling AI timeout")
+        return None
+    except Exception as e:
+        logger.warning(f"Kling AI error: {e}")
+        return None
+
+
 # ── AVATAR TIER 1: Vidnoz (free, 1900+ avatars) ──
 def create_vidnoz_video(audio_path, content_id, config):
     key = config["apis"].get("vidnoz_api_key","")
@@ -214,26 +362,82 @@ def assemble_ffmpeg(audio_path, avatar_path, content_id, script, config):
         logger.error(f"FFmpeg error: {e}"); return None
 
 # ── THUMBNAIL: Pillow (completely free) ──
-def generate_thumbnail(article, content_id, config):
+# Pre-plan: three templates -- 16:9 for YouTube (1280x720),
+# 9:16 for TikTok (1080x1920), 1:1 for Instagram (1080x1080).
+
+def generate_thumbnail(article, content_id, config, platform="youtube"):
+    """Generate a platform-specific thumbnail.
+
+    Args:
+        platform: "youtube" (16:9), "tiktok" (9:16), "instagram" (1:1).
+                  Defaults to "youtube" for backward compatibility.
+    """
+    SIZES = {
+        "youtube":   (1280, 720),
+        "tiktok":    (1080, 1920),
+        "instagram": (1080, 1080),
+    }
+    width, height = SIZES.get(platform, (1280, 720))
+    suffix = f"_{platform}" if platform != "youtube" else ""
+
     try:
         from PIL import Image, ImageDraw, ImageFont
-        assets = Path(config.get("paths",{}).get("assets","assets"))
-        out_dir = Path(config["paths"]["thumbnails"]); out_dir.mkdir(parents=True, exist_ok=True)
-        out = out_dir / f"{content_id}_thumb.png"
-        tmpl = assets / "thumbnail_template.png"
-        img = Image.open(tmpl).convert("RGBA") if tmpl.exists() else Image.new("RGBA",(1280,720),(0,71,171,255))
+        assets = Path(config.get("paths", {}).get("assets", "assets"))
+        out_dir = Path(config["paths"]["thumbnails"])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / f"{content_id}{suffix}_thumb.png"
+
+        tmpl = assets / f"thumbnail_template_{platform}.png"
+        if not tmpl.exists():
+            tmpl = assets / "thumbnail_template.png"
+
+        if tmpl.exists():
+            img = Image.open(tmpl).convert("RGBA").resize((width, height))
+        else:
+            img = Image.new("RGBA", (width, height), (0, 71, 171, 255))
+
         draw = ImageDraw.Draw(img)
-        title = article.get("title","AI News Update")[:55]
-        try: font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",60)
-        except: font = ImageFont.load_default()
-        draw.rectangle([40,480,1240,680],fill=(0,0,0,180))
-        draw.text((60,500),title,fill=(255,255,0),font=font)
-        img.save(str(out),"PNG")
-        logger.info(f"Thumbnail OK: {out.name}"); return str(out)
+        title = article.get("title", "AI News Update")[:55]
+        try:
+            font_size = 60 if platform == "youtube" else (52 if platform == "instagram" else 48)
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+        except Exception:
+            font = ImageFont.load_default()
+
+        # Position text band based on aspect ratio
+        if platform == "tiktok":
+            # 9:16 -- text in lower third
+            y_start = int(height * 0.75)
+            draw.rectangle([40, y_start, width - 40, y_start + 180], fill=(0, 0, 0, 180))
+            draw.text((60, y_start + 20), title, fill=(255, 255, 0), font=font)
+        elif platform == "instagram":
+            # 1:1 -- text in bottom quarter
+            y_start = int(height * 0.74)
+            draw.rectangle([40, y_start, width - 40, y_start + 200], fill=(0, 0, 0, 180))
+            draw.text((60, y_start + 30), title, fill=(255, 255, 0), font=font)
+            draw.text((60, y_start + 120), "Bolt AI -- Daily AI News", fill=(255, 255, 255), font=font)
+        else:
+            # 16:9 -- text in bottom band (original layout)
+            draw.rectangle([40, 480, width - 40, 680], fill=(0, 0, 0, 180))
+            draw.text((60, 500), title, fill=(255, 255, 0), font=font)
+
+        img.save(str(out), "PNG")
+        logger.info(f"Thumbnail OK ({platform} {width}x{height}): {out.name}")
+        return str(out)
     except ImportError:
-        logger.info("Pillow not installed. pip install Pillow"); return None
+        logger.info("Pillow not installed. pip install Pillow")
+        return None
     except Exception as e:
-        logger.warning(f"Thumbnail error: {e}"); return None
+        logger.warning(f"Thumbnail error: {e}")
+        return None
+
+
+def generate_all_thumbnails(article, content_id, config):
+    """Generate thumbnails for all three platforms. Returns dict of paths."""
+    return {
+        platform: generate_thumbnail(article, content_id, config, platform=platform)
+        for platform in ("youtube", "tiktok", "instagram")
+    }
 
 # ── MAIN ORCHESTRATOR ──
 def run_video_pipeline(package, config):
@@ -329,8 +533,15 @@ def run_video_pipeline(package, config):
 
     logger.info(f"Pipeline done: {package['status']}"); return package
 
-def run(config_path="code/config.json"):
-    config = load_config(config_path)
+def run(config: "dict | None" = None, *, config_path: str = "code/config.json"):
+    """Run the video pipeline for the next approved script in the queue.
+
+    Args:
+        config: Pre-loaded config dict (preferred). When provided, config_path is ignored.
+        config_path: Legacy fallback -- used only when config is None (CLI usage).
+    """
+    if config is None:
+        config = load_config(config_path)
     queue_dir = Path(config["paths"]["queue"])
     scripts = sorted(queue_dir.glob("script_*.json"))
     if not scripts: logger.warning("No scripts in queue"); return None

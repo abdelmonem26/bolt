@@ -54,27 +54,35 @@ def compose_caption(script: dict, article: dict, platform: str,
     if perf_hashtags:
         all_hashtags = _deduplicate(perf_hashtags + all_hashtags)
 
+    # Select best affiliate link for this content (pre-plan Section 22)
+    affiliate = _select_affiliate_link(pillar, title, config)
+
     if platform == "youtube":
-        return _compose_youtube(hook, script_text, title, source, link, all_hashtags, config)
+        return _compose_youtube(hook, script_text, title, source, link, all_hashtags, config, affiliate)
     elif platform == "tiktok":
-        return _compose_tiktok(hook, punchline, script_text, all_hashtags, config)
+        return _compose_tiktok(hook, punchline, script_text, all_hashtags, config, affiliate)
     elif platform == "instagram":
-        return _compose_instagram(punchline, script_text, all_hashtags, config)
+        return _compose_instagram(punchline, script_text, all_hashtags, config, affiliate)
     else:
         return {"title": title[:100], "caption": script_text[:200], "hashtags": all_hashtags[:5]}
 
 
 def _compose_youtube(hook: str, script_text: str, title: str,
-                     source: str, link: str, hashtags: list, config: dict) -> dict:
+                     source: str, link: str, hashtags: list, config: dict,
+                     affiliate: dict = None) -> dict:
     """
     YouTube: title from hook (max 100 chars), description with source URL,
     up to 15 tags, category 28.
     """
     yt_title = f"{hook[:90]} #Shorts" if len(hook) <= 90 else f"{hook[:87]}... #Shorts"
+    aff_line = ""
+    if affiliate and affiliate.get("url"):
+        aff_line = f"\n{affiliate['label']}: {affiliate['url']}\n"
     description = (
         f"{script_text[:200]}...\n\n"
         f"Source: {source}\n"
-        f"{link}\n\n"
+        f"{link}\n"
+        f"{aff_line}\n"
         f"{' '.join(hashtags[:10])}\n\n"
         f"Subscribe for daily AI news!"
     )
@@ -88,7 +96,7 @@ def _compose_youtube(hook: str, script_text: str, title: str,
 
 
 def _compose_tiktok(hook: str, punchline: str, script_text: str,
-                    hashtags: list, config: dict) -> dict:
+                    hashtags: list, config: dict, affiliate: dict = None) -> dict:
     """
     TikTok: hook + 2 key facts + catchphrase + 3-5 hashtags.
     Pre-plan says NEVER more than 5 hashtags.
@@ -104,7 +112,7 @@ def _compose_tiktok(hook: str, punchline: str, script_text: str,
 
 
 def _compose_instagram(punchline: str, script_text: str,
-                       hashtags: list, config: dict) -> dict:
+                       hashtags: list, config: dict, affiliate: dict = None) -> dict:
     """
     Instagram: punchline as standalone caption, up to 30 hashtags
     posted as first comment (not in caption).
@@ -145,6 +153,41 @@ def _deduplicate(items: list) -> list:
             seen.add(key)
             result.append(item)
     return result
+
+
+def _select_affiliate_link(pillar: str, article_title: str, config: dict) -> dict:
+    """Select the best affiliate link for this content based on pillar and keywords.
+
+    Pre-plan Section 22: "Caption composer selects the highest-earning affiliate
+    link relevant to the specific video topic, not a generic link."
+
+    Returns:
+        Dict with 'url' and 'label', or empty dict if none configured.
+    """
+    links_config = config.get("affiliate_links", {})
+    pillar_links = links_config.get(pillar, [])
+    if not pillar_links:
+        default = links_config.get("default", {})
+        return default if isinstance(default, dict) else {}
+
+    if isinstance(pillar_links, dict):
+        return pillar_links  # Single link, not a list
+
+    # Score each link by keyword overlap with article title
+    title_lower = article_title.lower()
+    best_link = pillar_links[0]  # Default to first
+    best_score = 0
+
+    for link in pillar_links:
+        if not link.get("url"):
+            continue
+        keywords = link.get("keywords", [])
+        score = sum(1 for kw in keywords if kw.lower() in title_lower)
+        if score > best_score:
+            best_score = score
+            best_link = link
+
+    return {"url": best_link.get("url", ""), "label": best_link.get("label", "")}
 
 
 def _get_performance_hashtags(pillar: str, platform: str,

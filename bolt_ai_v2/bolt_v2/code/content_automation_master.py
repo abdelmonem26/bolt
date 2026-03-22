@@ -25,7 +25,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # ── 1. Bootstrap: secrets + structured logging (must happen first) ─────────
-sys.path.insert(0, str(Path(__file__).parent))
+# Ensure code/ is on sys.path for module resolution.
+# Prefer running via `python -m code.content_automation_master` (no path hack needed)
+# but keep this for backward compat with `python code/content_automation_master.py`.
+_code_dir = str(Path(__file__).parent)
+if _code_dir not in sys.path:
+    sys.path.insert(0, _code_dir)
 
 # Load secrets from .env before anything else touches config
 from secrets_manager import load_all_secrets, print_audit as secrets_audit
@@ -88,124 +93,145 @@ class CircuitBreaker:
 
 # ── Pipeline steps ─────────────────────────────────────────────────────────
 
+# ── Error categories (pre-plan Section 16) ─────────────────────────────
+# Transient: retry (ConnectionError, TimeoutError, etc.)
+# Configuration: notify, no retry (missing keys, expired tokens)
+# Programmer: let it crash (KeyError, TypeError, AttributeError)
+
+_TRANSIENT_ERRORS = (ConnectionError, TimeoutError, OSError)
+
+
 async def step_news(notifier, cb, tracker):
     logger.info("STEP 1 — NEWS AGGREGATION")
     if cb.is_open("news"): return False
     db = get_db()
     try:
         await rate_limiter.acquire("claude")
-        articles = await news_aggregator.run()
-        if articles:
-            # Enrich articles with fuzzy classification (free, no API key needed)
-            try:
-                from content_extractor import fuzzy_classify
-                for a in articles:
-                    extraction = fuzzy_classify(a.get("title", ""), a.get("summary", ""))
-                    a["category"] = extraction.category
-                    a["sentiment"] = extraction.sentiment
-                    a["impact_score"] = extraction.impact_score
-                    a["companies_mentioned"] = extraction.companies_mentioned
-                    a["technologies_mentioned"] = extraction.technologies_mentioned
-            except ImportError:
-                logger.debug("content_extractor not available -- skipping enrichment")
-            db.save_articles(articles)
-            cb.record_success("news")
-            notify(notifier,"📡 News Aggregated",
-                   f"Top: {articles[0]['title'][:55]}\nScore: {articles[0].get('claude_score',0):.1f}/10",
-                   "info",{"count":len(articles)})
-            logger.info("News step done", extra={"articles_queued":len(articles)})
-            return True
-        return True
-    except Exception as e:
+        articles = await news_aggregator.run(CONFIG)
+    except _TRANSIENT_ERRORS as e:
         cb.record_failure("news")
-        logger.error("News step failed", extra={"error":str(e)}, exc_info=True)
-        notify(notifier,"❌ News Failed",str(e),"error")
+        logger.warning("News step transient failure", extra={"error": str(e)})
         db.enqueue_job("news", max_attempts=3)
         return False
+    # Programmer errors (KeyError, TypeError) intentionally NOT caught -- let them crash.
+
+    if articles:
+        try:
+            from content_extractor import fuzzy_classify
+            for a in articles:
+                extraction = fuzzy_classify(a.get("title", ""), a.get("summary", ""))
+                a["category"] = extraction.category
+                a["sentiment"] = extraction.sentiment
+                a["impact_score"] = extraction.impact_score
+                a["companies_mentioned"] = extraction.companies_mentioned
+                a["technologies_mentioned"] = extraction.technologies_mentioned
+        except ImportError:
+            logger.debug("content_extractor not available -- skipping enrichment")
+        db.save_articles(articles)
+        cb.record_success("news")
+        notify(notifier, "News Aggregated",
+               f"Top: {articles[0]['title'][:55]}\nScore: {articles[0].get('claude_score',0):.1f}/10",
+               "info", {"count": len(articles)})
+        logger.info("News step done", extra={"articles_queued": len(articles)})
+    return True
+
 
 def step_script(notifier, cb, tracker):
     logger.info("STEP 2 — SCRIPT GENERATION")
     db = get_db()
     try:
-        result = script_generator.run()
-        if result:
-            score = result["quality"]["overall_score"]
-            qg = CONFIG.get("quality_gate",{})
-            if score < qg.get("auto_reject_below",6.0):
-                notify(notifier,"🗑️ Script Auto-Rejected",f"Score {score:.1f} below threshold","warning")
-                logger.warning("Script auto-rejected",extra={"score":score,"content_id":result["content_id"]})
-                return None
-            tracker.record_usage("claude","input",0.4,"claude-3-sonnet")
-            tracker.record_usage("claude","output",0.15,"claude-3-sonnet_output")
-            db.save_script(result)
-            cb.record_success("claude")
-            icon="✅" if result.get("auto_approved") else "👁️"
-            notify(notifier,f"{icon} Script Ready",
-                   f"Score: {score:.1f}/10 · {result['quality']['word_count']} words\n_{result['script'][:100]}..._",
-                   "info" if score>=8.5 else "warning",{"score":score})
-            logger.info("Script generated",extra={"content_id":result["content_id"],"score":score,"status":result["status"]})
-        return result
-    except Exception as e:
+        result = script_generator.run(CONFIG)
+    except _TRANSIENT_ERRORS as e:
         cb.record_failure("claude")
-        logger.error("Script step failed",extra={"error":str(e)},exc_info=True)
-        notify(notifier,"❌ Script Failed",str(e),"error")
+        logger.warning("Script step transient failure", extra={"error": str(e)})
         return None
+
+    if result:
+        score = result["quality"]["overall_score"]
+        qg = CONFIG.get("quality_gate", {})
+        if score < qg.get("auto_reject_below", 6.0):
+            notify(notifier, "Script Auto-Rejected", f"Score {score:.1f} below threshold", "warning")
+            logger.warning("Script auto-rejected", extra={"score": score, "content_id": result["content_id"]})
+            return None
+        tracker.record_usage("claude", "input", 0.4, "claude-3-sonnet")
+        tracker.record_usage("claude", "output", 0.15, "claude-3-sonnet_output")
+        db.save_script(result)
+        cb.record_success("claude")
+        icon = "OK" if result.get("auto_approved") else "REVIEW"
+        notify(notifier, f"{icon} Script Ready",
+               f"Score: {score:.1f}/10 -- {result['quality']['word_count']} words\n{result['script'][:100]}...",
+               "info" if score >= 8.5 else "warning", {"score": score})
+        logger.info("Script generated", extra={
+            "content_id": result["content_id"], "score": score, "status": result["status"],
+        })
+    return result
+
 
 def step_video(notifier, cb, tracker):
     logger.info("STEP 3 — VIDEO PIPELINE")
     db = get_db()
     try:
-        result = video_pipeline.run()
-        if result:
-            if result.get("audio_path") and "_el.mp3" in str(result.get("audio_path","")):
-                tracker.record_usage("elevenlabs","tts",len(result.get("script","")))
-            db.save_video(result)
-            a="✅" if result.get("audio_path") else "❌"
-            v="✅" if result.get("avatar_video_path") else "⏭️"
-            f="✅" if result.get("final_video_path") else "⏭️"
-            notify(notifier,"🎬 Video Done",f"Audio {a} · Avatar {v} · Final {f}","info",{"status":result.get("status")})
-            logger.info("Video done",extra={"content_id":result.get("content_id"),"status":result.get("status")})
-        return result
-    except Exception as e:
-        logger.error("Video step failed",extra={"error":str(e)},exc_info=True)
-        notify(notifier,"❌ Video Failed",str(e),"error")
+        result = video_pipeline.run(CONFIG)
+    except _TRANSIENT_ERRORS as e:
+        logger.warning("Video step transient failure", extra={"error": str(e)})
         return None
+
+    if result:
+        if result.get("audio_path") and "_el.mp3" in str(result.get("audio_path", "")):
+            tracker.record_usage("elevenlabs", "tts", len(result.get("script", "")))
+        db.save_video(result)
+        a = "OK" if result.get("audio_path") else "FAIL"
+        v = "OK" if result.get("avatar_video_path") else "SKIP"
+        f = "OK" if result.get("final_video_path") else "SKIP"
+        notify(notifier, "Video Done", f"Audio {a} -- Avatar {v} -- Final {f}",
+               "info", {"status": result.get("status")})
+        logger.info("Video done", extra={
+            "content_id": result.get("content_id"), "status": result.get("status"),
+        })
+    return result
+
 
 def step_publish(notifier, cb, tracker):
     logger.info("STEP 4 — PUBLISHING")
     db = get_db()
     try:
-        result = platform_publisher.run()
-        if result:
-            res = result.get("publish_results",{})
-            db.save_publish_results(result.get("content_id", result["article"]["title"][:20]), res)
-            lines=[f"{'✅' if r.get('success') else '❌'} {p.title()}: {(r.get('url') or r.get('error',''))[:50]}"
-                   for p,r in res.items()]
-            ok=sum(1 for r in res.values() if r.get("success"))
-            if ok > 0:
-                tracker.increment_video_count()
-            notify(notifier,"🚀 Published","\n".join(lines),"info" if ok else "warning",{"platforms_ok":ok})
-            logger.info("Published",extra={"content_id":result.get("content_id"),"platforms_ok":ok})
-        return result
-    except Exception as e:
-        logger.error("Publish step failed",extra={"error":str(e)},exc_info=True)
-        notify(notifier,"❌ Publish Failed",str(e),"error")
+        result = platform_publisher.run(CONFIG)
+    except _TRANSIENT_ERRORS as e:
+        logger.warning("Publish step transient failure", extra={"error": str(e)})
         return None
+
+    if result:
+        res = result.get("publish_results", {})
+        db.save_publish_results(result.get("content_id", result["article"]["title"][:20]), res)
+        lines = [
+            f"{'OK' if r.get('success') else 'FAIL'} {p}: {(r.get('url') or r.get('error', ''))[:50]}"
+            for p, r in res.items()
+        ]
+        ok = sum(1 for r in res.values() if r.get("success"))
+        if ok > 0:
+            tracker.increment_video_count()
+        notify(notifier, "Published", "\n".join(lines),
+               "info" if ok else "warning", {"platforms_ok": ok})
+        logger.info("Published", extra={"content_id": result.get("content_id"), "platforms_ok": ok})
+    return result
+
 
 def step_analytics(notifier, tracker):
     logger.info("STEP 5 — ANALYTICS")
     db = get_db()
     try:
-        result = analytics_tracker.run()
-        if result:
-            s=result["summary"]
-            for platform,data in result.get("platforms",{}).items():
-                db.save_analytics_snapshot(platform, data)
-            notify(notifier,"📊 Analytics Updated",
-                   f"Views: {s['total_views_30d']:,} · Followers: {s['total_followers']:,}","info")
-        return result
-    except Exception as e:
-        logger.error("Analytics failed",extra={"error":str(e)}); return None
+        result = analytics_tracker.run(CONFIG)
+    except _TRANSIENT_ERRORS as e:
+        logger.warning("Analytics step transient failure", extra={"error": str(e)})
+        return None
+
+    if result:
+        s = result["summary"]
+        for platform, data in result.get("platforms", {}).items():
+            db.save_analytics_snapshot(platform, data)
+        notify(notifier, "Analytics Updated",
+               f"Views: {s['total_views_30d']:,} -- Followers: {s['total_followers']:,}", "info")
+    return result
 
 # ── Full pipeline ──────────────────────────────────────────────────────────
 
@@ -273,10 +299,17 @@ def run_scheduler():
     logger.info("Scheduler started — 24/7 mode")
     notify(notifier,"🕐 Scheduler Started","Bolt v2.2 running 24/7","info")
     schedule.every().day.at("06:00").do(lambda: asyncio.run(run_full_pipeline()))
-    schedule.every(6).hours.do(lambda: asyncio.run(news_aggregator.run()))
-    schedule.every().day.at("09:00").do(lambda: analytics_tracker.run())
+    schedule.every(6).hours.do(lambda: asyncio.run(news_aggregator.run(CONFIG)))
+    schedule.every().day.at("09:00").do(lambda: analytics_tracker.run(CONFIG))
     schedule.every().day.at("03:00").do(lambda: backup.create_backup("daily"))
     schedule.every().monday.at("02:00").do(lambda: backup.create_backup("weekly"))
+    # Feedback aggregator: weekly performance learning loop (pre-plan Section 22)
+    try:
+        from feedback_aggregator import aggregate as feedback_aggregate
+        schedule.every().sunday.at("04:00").do(lambda: feedback_aggregate(CONFIG))
+        logger.info("Feedback aggregator scheduled (Sundays 04:00 UTC)")
+    except ImportError:
+        logger.debug("feedback_aggregator not available -- skipping")
     schedule.every(30).days.at("01:00").do(lambda: backup.create_backup("monthly"))
     logger.info("Scheduler ready — pipeline at 06:00 UTC")
     while True: schedule.run_pending(); time.sleep(30)

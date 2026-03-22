@@ -274,9 +274,15 @@ def _build_weekly_chart(videos: list, yt: dict, tt: dict, ig: dict) -> list:
     return days
 
 
-def run(config_path: str = "code/config.json") -> dict:
-    """Fetch all analytics and update dashboard data files."""
-    config = load_config(config_path)
+def run(config=None, *, config_path: str = "code/config.json") -> dict:
+    """Fetch all analytics and update dashboard data files.
+
+    Args:
+        config: Pre-loaded config dict (preferred). When provided, config_path is ignored.
+        config_path: Legacy fallback -- used only when config is None (CLI usage).
+    """
+    if config is None:
+        config = load_config(config_path)
     logger.info("📊 Fetching analytics from all platforms...")
 
     yt = fetch_youtube_analytics(config)
@@ -300,7 +306,61 @@ def run(config_path: str = "code/config.json") -> dict:
         dashboard_data.write_text(json.dumps(analytics, indent=2))
         logger.info(f"Dashboard analytics updated: {dashboard_data}")
 
-    logger.info(f"✅ Analytics saved. Total views: {analytics['summary']['total_views_30d']:,}")
+    # ── Feedback loop: update per-publication metrics ─────────────────────
+    # Pre-plan: "24 hours after posting, the analytics tracker fetches views,
+    # retention rate, likes, and comments from each platform. These update
+    # the Publication records and feed back into the Article scoring model."
+    try:
+        from database import get_db
+        db = get_db()
+        stale = db.get_publications_needing_metrics(min_age_hours=24)
+        updated = 0
+        for pub in stale:
+            platform = pub["platform"]
+            platform_data = analytics.get("platforms", {}).get(platform, {})
+            if not platform_data:
+                continue
+            # Estimate per-video metrics from channel-level data
+            total_videos = max(analytics["summary"].get("videos_published", 1), 1)
+            views = platform_data.get("recent_30_views",
+                    platform_data.get("recent_20_views",
+                    platform_data.get("recent_20_plays", 0))) // total_videos
+            engagement = platform_data.get("engagement_rate", 0.0)
+            if views > 0 or engagement > 0:
+                db.update_publication_metrics(pub["content_id"], platform, views, engagement)
+                updated += 1
+        if updated:
+            logger.info(f"Updated metrics for {updated} publications")
+    except Exception as e:
+        logger.warning(f"Publication metrics update failed: {e}")
+
+    # ── Retention monitoring (pre-plan Section 2) ────────────────────────
+    # Target: 70% viewer retention at 30s. Alert when below 50%.
+    try:
+        for platform, data in analytics.get("platforms", {}).items():
+            retention = data.get("avg_retention_30s", data.get("completion_rate", 0))
+            if retention and retention < 50:
+                logger.warning(
+                    f"Retention below 50% on {platform}: {retention:.1f}%",
+                    extra={"platform": platform, "retention_30s": retention},
+                )
+                try:
+                    from notifications import NotificationManager, Notification, NotificationLevel
+                    nm = NotificationManager(config)
+                    nm.send(Notification(
+                        title=f"Low retention on {platform}",
+                        message=f"Avg 30s retention: {retention:.1f}% (target: 70%, minimum: 50%)",
+                        level=NotificationLevel.WARNING,
+                        metadata={"platform": platform, "retention": retention},
+                    ))
+                except Exception:
+                    pass
+            elif retention and retention >= 70:
+                logger.info(f"Retention target met on {platform}: {retention:.1f}%")
+    except Exception as e:
+        logger.debug(f"Retention check skipped: {e}")
+
+    logger.info(f"Analytics saved. Total views: {analytics['summary']['total_views_30d']:,}")
     return analytics
 
 

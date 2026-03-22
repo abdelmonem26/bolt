@@ -13,7 +13,10 @@ from pathlib import Path
 
 import requests
 
-from adapters import PlatformAdapter, PlatformPackage, PublicationResult
+try:
+    from . import PlatformAdapter, PlatformPackage, PublicationResult
+except ImportError:
+    from adapters import PlatformAdapter, PlatformPackage, PublicationResult
 
 logger = logging.getLogger("bolt.dist.tiktok")
 
@@ -67,7 +70,7 @@ class TikTokAdapter(PlatformAdapter):
             if not access_token or access_token.startswith("YOUR_"):
                 return PublicationResult(platform="tiktok", success=False, error="Buffer not configured")
 
-            from platform_publisher import get_buffer_profile_ids, schedule_via_buffer
+            from buffer_utils import get_buffer_profile_ids, schedule_via_buffer
             profiles = get_buffer_profile_ids(access_token)
             if "tiktok" not in profiles:
                 return PublicationResult(platform="tiktok", success=False, error="No TikTok Buffer profile")

@@ -36,12 +36,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-sys.path.insert(0, str(Path(__file__).parent))
+# Ensure code/ is on sys.path for module resolution.
+# Prefer running via `python -m code.api` or `uvicorn code.api:app`.
+_code_dir = str(Path(__file__).parent)
+if _code_dir not in sys.path:
+    sys.path.insert(0, _code_dir)
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 
 # Bootstrap secrets + logging before anything else
@@ -63,20 +68,7 @@ from backup_system import BackupSystem
 from hitl import approve_from_dashboard, reject_from_dashboard, list_pending
 from budget_enforcer import BudgetEnforcer
 
-# ── App setup ──────────────────────────────────────────────────────────────
-
-app = FastAPI(
-    title="Bolt AI Content Creator API",
-    description="Backend API powering the Bolt dashboard",
-    version="2.2",
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
-    dependencies=[Depends(_verify_api_key)],
-)
-
 import os as _os
-from fastapi import Depends, Request
-from fastapi.security import APIKeyHeader
 
 # ── API key authentication ─────────────────────────────────────────────────
 # Set BOLT_API_KEY in your environment or .env to enable auth.
@@ -102,6 +94,17 @@ async def _verify_api_key(request: Request, api_key: str = Depends(_api_key_head
     if api_key != _API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key (X-API-Key header)")
 
+
+# ── App setup ──────────────────────────────────────────────────────────────
+
+app = FastAPI(
+    title="Bolt AI Content Creator API",
+    description="Backend API powering the Bolt dashboard",
+    version="2.2",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    dependencies=[Depends(_verify_api_key)],
+)
 
 # ── CORS ───────────────────────────────────────────────────────────────────
 _cors_origins_env = _os.environ.get("BOLT_CORS_ORIGINS", "")

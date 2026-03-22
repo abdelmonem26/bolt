@@ -133,67 +133,9 @@ def publish_youtube(video_url: str, package: dict, config: dict) -> dict:
 # BUFFER API (TikTok + Instagram + YouTube fallback)
 # ─────────────────────────────────────────────
 
-def get_buffer_profile_ids(access_token: str) -> dict:
-    """Fetch Buffer profile IDs for YouTube, TikTok, Instagram."""
-    resp = requests.get(
-        "https://api.bufferapp.com/1/profiles.json",
-        params={"access_token": access_token},
-        timeout=10,
-    )
-    profiles = {}
-    for p in resp.json():
-        service = p.get("service", "").lower()
-        if service in ("youtube", "tiktok", "instagram"):
-            profiles[service] = p["id"]
-    return profiles
-
-
-def schedule_via_buffer(video_url: str, package: dict, platform: str,
-                          profile_id: str, access_token: str, post_time: str,
-                          config: dict) -> dict:
-    """Schedule a video post via Buffer API."""
-    captions = package.get("captions", {}).get(platform, {})
-    hashtags = " ".join(captions.get("hashtags", ["#AI"]))
-
-    if platform == "youtube":
-        text = f"{captions.get('title', package['article']['title'])} {hashtags}"
-    elif platform == "tiktok":
-        text = captions.get("caption", f"⚡ {package['article']['title'][:100]}") + f" {hashtags}"
-    else:  # instagram
-        text = captions.get("caption", f"⚡ {package['article']['title'][:120]}") + f" {hashtags}"
-
-    # Calculate scheduled time
-    today = datetime.now(timezone.utc)
-    hour, minute = map(int, post_time.split(":"))
-    scheduled = today.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if scheduled < today:
-        scheduled += timedelta(days=1)
-
-    payload = {
-        "profile_ids[]": profile_id,
-        "text": text,
-        "scheduled_at": scheduled.isoformat(),
-        "media[video]": video_url,
-        "media[thumbnail]": "",     # Buffer will auto-generate
-        "access_token": access_token,
-    }
-
-    try:
-        resp = requests.post(
-            "https://api.bufferapp.com/1/updates/create.json",
-            data=payload, timeout=20,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("success"):
-            post_url = data.get("updates", [{}])[0].get("id", "")
-            logger.info(f"✅ Buffer scheduled [{platform}] for {scheduled.strftime('%H:%M UTC')}")
-            return {"platform": platform, "success": True, "scheduled_at": scheduled.isoformat(),
-                    "buffer_id": post_url}
-        return {"platform": platform, "success": False, "error": data.get("message", "Unknown")}
-    except Exception as e:
-        logger.error(f"Buffer [{platform}] failed: {e}")
-        return {"platform": platform, "success": False, "error": str(e)}
+# Buffer helpers are now in buffer_utils.py (shared with distribution layer adapters).
+# Re-export for backward compatibility with any code importing from here.
+from buffer_utils import get_buffer_profile_ids, schedule_via_buffer  # noqa: F401
 
 
 # ─────────────────────────────────────────────
@@ -322,9 +264,15 @@ def publish_instagram_direct(video_url: str, package: dict, config: dict) -> dic
     return {"platform": "instagram", "success": True, "media_id": media_id}
 
 
-def run(config_path: str = "code/config.json") -> dict | None:
-    """Load ready-to-publish package and publish to all platforms."""
-    config = load_config(config_path)
+def run(config: "dict | None" = None, *, config_path: str = "code/config.json") -> "dict | None":
+    """Load ready-to-publish package and publish to all platforms.
+
+    Args:
+        config: Pre-loaded config dict (preferred). When provided, config_path is ignored.
+        config_path: Legacy fallback -- used only when config is None (CLI usage).
+    """
+    if config is None:
+        config = load_config(config_path)
     queue_dir = Path(config["paths"]["queue"])
 
     ready = [f for f in sorted(queue_dir.glob("script_*.json"))

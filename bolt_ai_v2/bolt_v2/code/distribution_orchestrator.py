@@ -14,6 +14,7 @@ modules. They share only the database."
 """
 
 import logging
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -59,10 +60,21 @@ def distribute(content_id: str, config: dict) -> dict:
         return {"status": "no_platforms"}
 
     results = {}
-    stagger_minutes = 0  # Pre-plan: stagger posts by >= 2 hours
+    # Pre-plan Section 21: "Never post to all three platforms within 10 minutes
+    # of each other. Stagger by at least 2 hours."
+    stagger_seconds = config.get("distribution", {}).get("stagger_seconds", 120 * 60)  # default 2h
+    platforms_published = 0
 
     for adapter in adapters:
         platform = adapter.platform_name
+        # Enforce stagger rule: wait between platform posts (skip for first)
+        if platforms_published > 0 and stagger_seconds > 0:
+            logger.info(
+                f"Stagger rule: waiting {stagger_seconds}s before {platform}",
+                extra={"content_id": content_id},
+            )
+            time.sleep(stagger_seconds)
+
         logger.info(f"Distributing to {platform}", extra={"content_id": content_id})
 
         try:
@@ -89,6 +101,8 @@ def distribute(content_id: str, config: dict) -> dict:
                 "post_id": result.post_id,
                 "error": result.error,
             }
+
+            platforms_published += 1
 
             if result.success:
                 logger.info(f"Distribution OK: {platform}", extra={

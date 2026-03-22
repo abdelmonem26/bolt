@@ -14,7 +14,10 @@ from pathlib import Path
 
 import requests
 
-from adapters import PlatformAdapter, PlatformPackage, PublicationResult
+try:
+    from . import PlatformAdapter, PlatformPackage, PublicationResult
+except ImportError:
+    from adapters import PlatformAdapter, PlatformPackage, PublicationResult
 
 logger = logging.getLogger("bolt.dist.instagram")
 
@@ -70,7 +73,7 @@ class InstagramAdapter(PlatformAdapter):
         try:
             access_token = config.get("apis", {}).get("buffer_access_token", "")
             if access_token and not access_token.startswith("YOUR_"):
-                from platform_publisher import get_buffer_profile_ids, schedule_via_buffer
+                from buffer_utils import get_buffer_profile_ids, schedule_via_buffer
                 profiles = get_buffer_profile_ids(access_token)
                 if "instagram" in profiles:
                     post_time = config.get("platforms", {}).get("instagram", {}).get("post_time", "12:00")

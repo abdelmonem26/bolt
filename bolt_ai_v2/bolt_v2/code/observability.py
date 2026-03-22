@@ -110,8 +110,15 @@ def setup_logging(
     root.handlers.clear()
 
     if json_file:
+        from logging.handlers import RotatingFileHandler
         date_str = datetime.now().strftime("%Y%m%d")
-        fh = logging.FileHandler(log_path / f"bolt_{date_str}.jsonl", encoding="utf-8")
+        # RotatingFileHandler: max 10 MB per file, keep 5 backups (50 MB total)
+        fh = RotatingFileHandler(
+            log_path / f"bolt_{date_str}.jsonl",
+            maxBytes=10 * 1024 * 1024,  # 10 MB
+            backupCount=5,
+            encoding="utf-8",
+        )
         fh.setFormatter(JSONFormatter())
         fh.setLevel(logging.DEBUG)
         root.addHandler(fh)

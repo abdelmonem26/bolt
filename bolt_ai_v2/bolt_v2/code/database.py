@@ -203,6 +203,12 @@ class BoltDB:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
+        # Run any pending migrations after initial schema
+        try:
+            from db_migrations import run_migrations
+            run_migrations(self.db_path)
+        except Exception as e:
+            logger.warning(f"Migration check failed (non-fatal): {e}")
         logger.info(f"Database ready: {self.db_path}")
 
     def _init_schema(self) -> None:
@@ -496,6 +502,24 @@ class BoltDB:
                 SET views=?, engagement_rate=?
                 WHERE content_id=? AND platform=?
             """, (views, engagement_rate, content_id, platform))
+
+    def get_publications_needing_metrics(self, min_age_hours: int = 24) -> list:
+        """Return publications older than min_age_hours that have no metrics yet.
+
+        Pre-plan: '24 hours after posting, the analytics tracker fetches views,
+        retention rate, likes, and comments from each platform. These update the
+        Publication records.'
+        """
+        with _get_conn(self.db_path) as conn:
+            rows = conn.execute("""
+                SELECT content_id, platform, post_url, post_id, published_at
+                FROM publications
+                WHERE success = 1
+                  AND (views IS NULL OR views = 0)
+                  AND published_at IS NOT NULL
+                  AND julianday('now') - julianday(published_at) >= ?
+            """, (min_age_hours / 24.0,)).fetchall()
+        return [dict(r) for r in rows]
 
     def save_publish_results(self, content_id: str, results: dict) -> None:
         """Save publish results for all platforms from a results dict."""
