@@ -328,7 +328,7 @@ def _fallback_captions(article: dict, pillar: str, config: dict) -> dict:
     }
 
 
-def run(config: dict | None = None, *, config_path: str = "code/config.json") -> dict | None:
+def run(config: "dict | None" = None, *, config_path: str = "code/config.json") -> "dict | None":
     """Generate a script for the top queued article.
 
     Args:

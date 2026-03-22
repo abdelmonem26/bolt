@@ -329,7 +329,7 @@ def run_video_pipeline(package, config):
 
     logger.info(f"Pipeline done: {package['status']}"); return package
 
-def run(config: dict | None = None, *, config_path: str = "code/config.json"):
+def run(config: "dict | None" = None, *, config_path: str = "code/config.json"):
     """Run the video pipeline for the next approved script in the queue.
 
     Args:

@@ -274,7 +274,7 @@ def _build_weekly_chart(videos: list, yt: dict, tt: dict, ig: dict) -> list:
     return days
 
 
-def run(config: dict | None = None, *, config_path: str = "code/config.json") -> dict:
+def run(config=None, *, config_path: str = "code/config.json") -> dict:
     """Fetch all analytics and update dashboard data files.
 
     Args:

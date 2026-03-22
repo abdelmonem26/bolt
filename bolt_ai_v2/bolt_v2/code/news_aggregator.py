@@ -265,7 +265,7 @@ def write_queue(articles: list[dict], config: dict) -> None:
         logger.info(f"Queued [{i+1}] {article['title'][:60]}... (score: {article['claude_score']:.1f})")
 
 
-async def run(config: dict | None = None, *, config_path: str = "code/config.json") -> list[dict]:
+async def run(config: "dict | None" = None, *, config_path: str = "code/config.json") -> list[dict]:
     """Full aggregation pipeline. Returns top articles.
 
     Args:

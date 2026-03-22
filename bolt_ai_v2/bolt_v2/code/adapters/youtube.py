@@ -13,7 +13,11 @@ from pathlib import Path
 
 import requests
 
-from adapters import PlatformAdapter, PlatformPackage, PublicationResult
+try:
+    from . import PlatformAdapter, PlatformPackage, PublicationResult
+except ImportError:
+    # Fallback for when code/ is on sys.path (CLI, job_worker entry points)
+    from adapters import PlatformAdapter, PlatformPackage, PublicationResult
 
 logger = logging.getLogger("bolt.dist.youtube")
 
@@ -79,13 +83,17 @@ class YouTubeAdapter(PlatformAdapter):
 
             upload_url = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status"
             from requests_toolbelt import MultipartEncoder
-            mp = MultipartEncoder(fields={
-                "metadata": ("metadata", json.dumps(metadata), "application/json"),
-                "video": ("video.mp4", open(package.video_path, "rb"), "video/mp4"),
-            })
 
-            resp = requests.post(upload_url, data=mp,
-                                 headers={**headers, "Content-Type": mp.content_type}, timeout=300)
+            # Use a with-statement to ensure the file handle is closed even if
+            # the upload fails (Bug fix: prevents file handle leak).
+            with open(package.video_path, "rb") as video_file:
+                mp = MultipartEncoder(fields={
+                    "metadata": ("metadata", json.dumps(metadata), "application/json"),
+                    "video": ("video.mp4", video_file, "video/mp4"),
+                })
+
+                resp = requests.post(upload_url, data=mp,
+                                     headers={**headers, "Content-Type": mp.content_type}, timeout=300)
             resp.raise_for_status()
             video_id = resp.json()["id"]
             url = f"https://www.youtube.com/shorts/{video_id}"
