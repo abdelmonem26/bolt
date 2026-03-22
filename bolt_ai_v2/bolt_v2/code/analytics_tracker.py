@@ -306,7 +306,35 @@ def run(config=None, *, config_path: str = "code/config.json") -> dict:
         dashboard_data.write_text(json.dumps(analytics, indent=2))
         logger.info(f"Dashboard analytics updated: {dashboard_data}")
 
-    logger.info(f"✅ Analytics saved. Total views: {analytics['summary']['total_views_30d']:,}")
+    # ── Feedback loop: update per-publication metrics ─────────────────────
+    # Pre-plan: "24 hours after posting, the analytics tracker fetches views,
+    # retention rate, likes, and comments from each platform. These update
+    # the Publication records and feed back into the Article scoring model."
+    try:
+        from database import get_db
+        db = get_db()
+        stale = db.get_publications_needing_metrics(min_age_hours=24)
+        updated = 0
+        for pub in stale:
+            platform = pub["platform"]
+            platform_data = analytics.get("platforms", {}).get(platform, {})
+            if not platform_data:
+                continue
+            # Estimate per-video metrics from channel-level data
+            total_videos = max(analytics["summary"].get("videos_published", 1), 1)
+            views = platform_data.get("recent_30_views",
+                    platform_data.get("recent_20_views",
+                    platform_data.get("recent_20_plays", 0))) // total_videos
+            engagement = platform_data.get("engagement_rate", 0.0)
+            if views > 0 or engagement > 0:
+                db.update_publication_metrics(pub["content_id"], platform, views, engagement)
+                updated += 1
+        if updated:
+            logger.info(f"Updated metrics for {updated} publications")
+    except Exception as e:
+        logger.warning(f"Publication metrics update failed: {e}")
+
+    logger.info(f"Analytics saved. Total views: {analytics['summary']['total_views_30d']:,}")
     return analytics
 
 
