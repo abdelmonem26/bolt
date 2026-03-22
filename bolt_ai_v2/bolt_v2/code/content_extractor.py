@@ -295,24 +295,37 @@ def _fuzzy_match(
     # Try rapidfuzz (faster and more accurate)
     try:
         from rapidfuzz import process, fuzz
-        choices = {pattern: canonical for pattern, canonical in concepts}
-        result = process.extractOne(
-            text_lower,
-            choices.keys(),
-            scorer=fuzz.WRatio,
-            score_cutoff=threshold * 100,
-        )
-        if result is not None:
-            matched_pattern, score, _ = result
-            return choices[matched_pattern]
+        # Filter out very short patterns that cause false positives with WRatio
+        # (e.g. "chip" matching "pizza" via partial ratio).
+        filtered = {
+            pattern: canonical
+            for pattern, canonical in concepts
+            if not (len(pattern) < len(text_lower) * 0.3 and len(pattern) < 8)
+        }
+        if filtered:
+            result = process.extractOne(
+                text_lower,
+                filtered.keys(),
+                scorer=fuzz.WRatio,
+                score_cutoff=threshold * 100,
+            )
+            if result is not None:
+                matched_pattern, score, _ = result
+                return filtered[matched_pattern]
         return None
     except ImportError:
         pass
 
     # Fallback: difflib SequenceMatcher
+    # Guard: skip comparisons where the pattern is much shorter than the text.
+    # SequenceMatcher produces false positives when comparing a long string
+    # against a very short pattern (e.g. "best pizza recipes" vs "chip").
     best_ratio = 0.0
     best_canonical = None
     for pattern, canonical in concepts:
+        # Skip if length ratio is too skewed (pattern < 30% of text length)
+        if len(pattern) < len(text_lower) * 0.3 and len(pattern) < 8:
+            continue
         ratio = SequenceMatcher(None, text_lower, pattern).ratio()
         if ratio > best_ratio and ratio >= threshold:
             best_ratio = ratio
