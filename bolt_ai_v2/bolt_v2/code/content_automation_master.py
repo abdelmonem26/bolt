@@ -25,7 +25,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # ── 1. Bootstrap: secrets + structured logging (must happen first) ─────────
-sys.path.insert(0, str(Path(__file__).parent))
+# Ensure code/ is on sys.path for module resolution.
+# Prefer running via `python -m code.content_automation_master` (no path hack needed)
+# but keep this for backward compat with `python code/content_automation_master.py`.
+_code_dir = str(Path(__file__).parent)
+if _code_dir not in sys.path:
+    sys.path.insert(0, _code_dir)
 
 # Load secrets from .env before anything else touches config
 from secrets_manager import load_all_secrets, print_audit as secrets_audit

@@ -36,7 +36,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-sys.path.insert(0, str(Path(__file__).parent))
+# Ensure code/ is on sys.path for module resolution.
+# Prefer running via `python -m code.api` or `uvicorn code.api:app`.
+_code_dir = str(Path(__file__).parent)
+if _code_dir not in sys.path:
+    sys.path.insert(0, _code_dir)
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware

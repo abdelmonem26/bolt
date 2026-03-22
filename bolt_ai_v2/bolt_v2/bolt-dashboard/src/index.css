@@ -81,3 +81,14 @@ body {
 .recharts-cartesian-grid-horizontal line,
 .recharts-cartesian-grid-vertical line { stroke: rgba(255,255,255,0.04) !important; }
 .recharts-text { fill: #7A8AA0 !important; font-size: 11px !important; font-family: 'JetBrains Mono' !important; }
+
+/* Skeleton loading animation */
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.skeleton-pulse {
+  background: linear-gradient(90deg, var(--bolt-surface) 25%, var(--bolt-border) 50%, var(--bolt-surface) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}

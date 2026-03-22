@@ -4,16 +4,32 @@
  */
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-const API_KEY  = import.meta.env.VITE_API_KEY || ''
+
+/**
+ * Get the API key from environment variable or localStorage.
+ * localStorage is set by the Login page when BOLT_API_KEY auth is enabled.
+ */
+function getApiKey(): string {
+  return import.meta.env.VITE_API_KEY || localStorage.getItem('bolt_api_key') || ''
+}
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
+  const apiKey = getApiKey()
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(API_KEY ? { 'X-API-Key': API_KEY } : {}),
+    ...(apiKey ? { 'X-API-Key': apiKey } : {}),
     ...(opts?.headers as Record<string, string> || {}),
   }
   const res = await fetch(`${API_BASE}${path}`, { ...opts, headers })
-  if (!res.ok) throw new Error(`API ${path} → ${res.status}`)
+  if (res.status === 401) {
+    // Auth required but key is invalid/missing -- redirect to login
+    localStorage.removeItem('bolt_api_key')
+    if (window.location.pathname !== '/login') {
+      window.location.href = '/login'
+    }
+    throw new Error('Authentication required')
+  }
+  if (!res.ok) throw new Error(`API ${path} -> ${res.status}`)
   return res.json()
 }
 

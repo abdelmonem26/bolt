@@ -64,6 +64,36 @@
       "timezone": "America/New_York"
     }
   },
+  "avatar_config": {
+    "_note": "Pre-plan Section 4: avatar body language parameters",
+    "eye_direction": "camera",
+    "idle_motion": true,
+    "gesture_intensity": "medium",
+    "posture": "open_slight_angle",
+    "emphasis_lean": true,
+    "hand_visibility": "visible"
+  },
+  "affiliate_links": {
+    "_note": "Pre-plan Section 22: affiliate link rotation by pillar",
+    "ai_tools": [
+      {"url": "", "label": "Try it free", "keywords": ["productivity", "automation", "free tool"]},
+      {"url": "", "label": "Get started", "keywords": ["coding", "developer", "IDE"]}
+    ],
+    "ai_news": [
+      {"url": "", "label": "Daily AI digest", "keywords": []}
+    ],
+    "ai_concepts": [
+      {"url": "", "label": "Learn more", "keywords": ["course", "tutorial"]}
+    ],
+    "ai_daily_life": [
+      {"url": "", "label": "Check it out", "keywords": []}
+    ],
+    "default": {"url": "", "label": "Link in bio"}
+  },
+  "distribution": {
+    "stagger_seconds": 7200,
+    "_note": "Pre-plan Section 21: stagger posts by >= 2 hours between platforms"
+  },
   "content_pillars": {
     "monday": "ai_news",
     "tuesday": "ai_tools",
