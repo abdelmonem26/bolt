@@ -75,7 +75,7 @@
   },
   "automation": {
     "news_fetch_interval_hours": 6,
-    "auto_publish_threshold": 8.5,
+    "auto_publish_threshold": 9.0,
     "auto_publish_enabled": false,
     "review_queue_enabled": true,
     "max_retries": 3,

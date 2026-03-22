@@ -82,8 +82,16 @@ QUALITY_SCORING_PROMPT = """Score this Bolt AI script on these criteria. Return 
 Script:
 {script}
 
+The hook MUST use at least one of these 5 proven attention triggers:
+1. Specificity shock -- a specific number or fact that creates credibility ("processes 1 million tokens")
+2. Threat to identity/livelihood -- implies the viewer's job or skill is at risk
+3. Counterintuitive contradiction -- something that violates expectation ("the expensive one lost to the free one")
+4. Free value signal -- promises free tools, resources, or knowledge
+5. Social proof with stakes -- large numbers of people switching or adopting something
+
 {{
-  "hook_strength": <0-10, does it grab attention in first 3 seconds?>,
+  "hook_strength": <0-10, does it use at least one of the 5 triggers above?>,
+  "hook_trigger": "<which of the 5 triggers the hook uses, or 'none'>",
   "simplicity": <0-10, is the language clear for a general audience?>,
   "bolt_voice": <0-10, does it sound like Bolt's fun robot personality?>,
   "word_count": <actual word count>,
