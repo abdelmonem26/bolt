@@ -329,8 +329,15 @@ def run_video_pipeline(package, config):
 
     logger.info(f"Pipeline done: {package['status']}"); return package
 
-def run(config_path="code/config.json"):
-    config = load_config(config_path)
+def run(config: dict | None = None, *, config_path: str = "code/config.json"):
+    """Run the video pipeline for the next approved script in the queue.
+
+    Args:
+        config: Pre-loaded config dict (preferred). When provided, config_path is ignored.
+        config_path: Legacy fallback -- used only when config is None (CLI usage).
+    """
+    if config is None:
+        config = load_config(config_path)
     queue_dir = Path(config["paths"]["queue"])
     scripts = sorted(queue_dir.glob("script_*.json"))
     if not scripts: logger.warning("No scripts in queue"); return None

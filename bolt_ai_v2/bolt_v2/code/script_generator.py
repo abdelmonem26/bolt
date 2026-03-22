@@ -328,8 +328,15 @@ def _fallback_captions(article: dict, pillar: str, config: dict) -> dict:
     }
 
 
-def run(config_path: str = "code/config.json") -> dict | None:
-    config = load_config(config_path)
+def run(config: dict | None = None, *, config_path: str = "code/config.json") -> dict | None:
+    """Generate a script for the top queued article.
+
+    Args:
+        config: Pre-loaded config dict (preferred). When provided, config_path is ignored.
+        config_path: Legacy fallback -- used only when config is None (CLI usage).
+    """
+    if config is None:
+        config = load_config(config_path)
     pillar = get_todays_pillar(config)
     logger.info(f"Today's content pillar: {pillar}")
 

@@ -36,15 +36,31 @@ _DEFAULT_PRICING: dict = {
 
 
 class CostTracker:
-    """Track and estimate costs for the Bolt AI pipeline."""
-    
+    """Track and estimate costs for the Bolt AI pipeline.
+
+    Primary storage: SQLite ``cost_events`` table (via database.BoltDB).
+    Secondary storage: ``data/analytics/cost_tracking.json`` (deprecated,
+    kept for backward compatibility with dashboard static file reads).
+
+    The DB is the source of truth. The JSON file is written as a convenience
+    but should not be relied upon for cost calculations.
+    """
+
     def __init__(self, config_path: str = "code/config.json"):
         self.config_path = config_path
         self.data_dir = Path("data/analytics")
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self.costs_file = self.data_dir / "cost_tracking.json"
         self.costs = self._load_costs()
+
+        # Attempt to get DB handle for primary storage
+        self._db = None
+        try:
+            from database import get_db
+            self._db = get_db()
+        except Exception:
+            logger.debug("DB unavailable for cost tracking -- using JSON file only")
         
     def _load_costs(self) -> Dict:
         """Load existing cost data."""
@@ -65,16 +81,27 @@ class CostTracker:
         with open(self.costs_file, 'w') as f:
             json.dump(self.costs, f, indent=2)
     
-    def record_usage(self, service: str, operation: str, quantity: float, 
+    def record_usage(self, service: str, operation: str, quantity: float,
                     model: str = None) -> None:
-        """Record API usage."""
+        """Record API usage.
+
+        Writes to the SQLite ``cost_events`` table (primary) and the legacy
+        JSON file (secondary).
+        """
         timestamp = datetime.now(timezone.utc).isoformat()
         date = datetime.now().strftime("%Y-%m-%d")
-        
+
         # Calculate cost
         cost = self._calculate_cost(service, operation, quantity, model)
-        
-        # Record in daily tracking
+
+        # ── Primary: write to DB ───────────────────────────────────────
+        if self._db is not None:
+            try:
+                self._db.record_cost(service, operation, cost, model=model)
+            except Exception as exc:
+                logger.warning(f"DB cost write failed ({exc}) -- falling back to JSON only")
+
+        # ── Secondary (deprecated): write to JSON file ─────────────────
         daily_entry = {
             "timestamp": timestamp,
             "service": service,
@@ -83,13 +110,13 @@ class CostTracker:
             "cost": cost,
             "model": model
         }
-        
+
         self.costs["daily"].append(daily_entry)
-        
+
         # Keep only last 90 days of daily data
         if len(self.costs["daily"]) > 1000:
             self.costs["daily"] = self.costs["daily"][-1000:]
-        
+
         # Update monthly totals
         if date not in self.costs["monthly"]:
             self.costs["monthly"][date] = {
@@ -97,16 +124,16 @@ class CostTracker:
                 "services": defaultdict(float),
                 "videos": 0
             }
-        
+
         self.costs["monthly"][date]["total_cost"] += cost
         self.costs["monthly"][date]["services"][service] += cost
-        
+
         # Update totals
         self.costs["total_spent"] += cost
-        
+
         self._save_costs()
-        
-        logger.info(f"💰 Recorded: {service}/{operation} = ${cost:.4f}")
+
+        logger.info(f"Recorded: {service}/{operation} = ${cost:.4f}")
     
     def _load_pricing(self) -> dict:
         """Load pricing from config.json, falling back to defaults if unavailable."""

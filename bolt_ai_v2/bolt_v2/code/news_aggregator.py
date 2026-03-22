@@ -239,8 +239,14 @@ Respond ONLY with valid JSON in this exact format:
 
 
 def write_queue(articles: list[dict], config: dict) -> None:
-    """Write top articles to the content queue as individual JSON files."""
-    queue_dir = Path(config["paths"]["queue"])
+    """Write top articles to the content queue as individual JSON files.
+
+    DEPRECATED: Articles are now saved to the SQLite DB by the orchestrator
+    (database.save_articles()). This function writes redundant JSON files for
+    backward compatibility with script_generator's queue reader. Once
+    script_generator reads exclusively from the DB, this function can be removed.
+    """
+    queue_dir = Path(config.get("paths", {}).get("queue", "data/queue"))
     queue_dir.mkdir(parents=True, exist_ok=True)
 
     # Clear old pending files
@@ -259,9 +265,15 @@ def write_queue(articles: list[dict], config: dict) -> None:
         logger.info(f"Queued [{i+1}] {article['title'][:60]}... (score: {article['claude_score']:.1f})")
 
 
-async def run(config_path: str = "code/config.json") -> list[dict]:
-    """Full aggregation pipeline. Returns top articles."""
-    config = load_config(config_path)
+async def run(config: dict | None = None, *, config_path: str = "code/config.json") -> list[dict]:
+    """Full aggregation pipeline. Returns top articles.
+
+    Args:
+        config: Pre-loaded config dict (preferred). When provided, config_path is ignored.
+        config_path: Legacy fallback -- used only when config is None (CLI usage).
+    """
+    if config is None:
+        config = load_config(config_path)
 
     # 1. Fetch all feeds concurrently
     raw = await fetch_all_feeds(config)

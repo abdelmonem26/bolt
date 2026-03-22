@@ -274,9 +274,15 @@ def _build_weekly_chart(videos: list, yt: dict, tt: dict, ig: dict) -> list:
     return days
 
 
-def run(config_path: str = "code/config.json") -> dict:
-    """Fetch all analytics and update dashboard data files."""
-    config = load_config(config_path)
+def run(config: dict | None = None, *, config_path: str = "code/config.json") -> dict:
+    """Fetch all analytics and update dashboard data files.
+
+    Args:
+        config: Pre-loaded config dict (preferred). When provided, config_path is ignored.
+        config_path: Legacy fallback -- used only when config is None (CLI usage).
+    """
+    if config is None:
+        config = load_config(config_path)
     logger.info("📊 Fetching analytics from all platforms...")
 
     yt = fetch_youtube_analytics(config)

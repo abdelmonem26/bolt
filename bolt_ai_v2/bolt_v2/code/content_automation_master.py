@@ -94,7 +94,7 @@ async def step_news(notifier, cb, tracker):
     db = get_db()
     try:
         await rate_limiter.acquire("claude")
-        articles = await news_aggregator.run()
+        articles = await news_aggregator.run(CONFIG)
         if articles:
             # Enrich articles with fuzzy classification (free, no API key needed)
             try:
@@ -127,7 +127,7 @@ def step_script(notifier, cb, tracker):
     logger.info("STEP 2 — SCRIPT GENERATION")
     db = get_db()
     try:
-        result = script_generator.run()
+        result = script_generator.run(CONFIG)
         if result:
             score = result["quality"]["overall_score"]
             qg = CONFIG.get("quality_gate",{})
@@ -155,7 +155,7 @@ def step_video(notifier, cb, tracker):
     logger.info("STEP 3 — VIDEO PIPELINE")
     db = get_db()
     try:
-        result = video_pipeline.run()
+        result = video_pipeline.run(CONFIG)
         if result:
             if result.get("audio_path") and "_el.mp3" in str(result.get("audio_path","")):
                 tracker.record_usage("elevenlabs","tts",len(result.get("script","")))
@@ -175,7 +175,7 @@ def step_publish(notifier, cb, tracker):
     logger.info("STEP 4 — PUBLISHING")
     db = get_db()
     try:
-        result = platform_publisher.run()
+        result = platform_publisher.run(CONFIG)
         if result:
             res = result.get("publish_results",{})
             db.save_publish_results(result.get("content_id", result["article"]["title"][:20]), res)
@@ -196,7 +196,7 @@ def step_analytics(notifier, tracker):
     logger.info("STEP 5 — ANALYTICS")
     db = get_db()
     try:
-        result = analytics_tracker.run()
+        result = analytics_tracker.run(CONFIG)
         if result:
             s=result["summary"]
             for platform,data in result.get("platforms",{}).items():
@@ -273,8 +273,8 @@ def run_scheduler():
     logger.info("Scheduler started — 24/7 mode")
     notify(notifier,"🕐 Scheduler Started","Bolt v2.2 running 24/7","info")
     schedule.every().day.at("06:00").do(lambda: asyncio.run(run_full_pipeline()))
-    schedule.every(6).hours.do(lambda: asyncio.run(news_aggregator.run()))
-    schedule.every().day.at("09:00").do(lambda: analytics_tracker.run())
+    schedule.every(6).hours.do(lambda: asyncio.run(news_aggregator.run(CONFIG)))
+    schedule.every().day.at("09:00").do(lambda: analytics_tracker.run(CONFIG))
     schedule.every().day.at("03:00").do(lambda: backup.create_backup("daily"))
     schedule.every().monday.at("02:00").do(lambda: backup.create_backup("weekly"))
     schedule.every(30).days.at("01:00").do(lambda: backup.create_backup("monthly"))

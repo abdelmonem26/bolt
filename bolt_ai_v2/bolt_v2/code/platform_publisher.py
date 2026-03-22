@@ -322,9 +322,15 @@ def publish_instagram_direct(video_url: str, package: dict, config: dict) -> dic
     return {"platform": "instagram", "success": True, "media_id": media_id}
 
 
-def run(config_path: str = "code/config.json") -> dict | None:
-    """Load ready-to-publish package and publish to all platforms."""
-    config = load_config(config_path)
+def run(config: dict | None = None, *, config_path: str = "code/config.json") -> dict | None:
+    """Load ready-to-publish package and publish to all platforms.
+
+    Args:
+        config: Pre-loaded config dict (preferred). When provided, config_path is ignored.
+        config_path: Legacy fallback -- used only when config is None (CLI usage).
+    """
+    if config is None:
+        config = load_config(config_path)
     queue_dir = Path(config["paths"]["queue"])
 
     ready = [f for f in sorted(queue_dir.glob("script_*.json"))
