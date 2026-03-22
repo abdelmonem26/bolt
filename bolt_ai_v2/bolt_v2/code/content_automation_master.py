@@ -298,6 +298,13 @@ def run_scheduler():
     schedule.every().day.at("09:00").do(lambda: analytics_tracker.run(CONFIG))
     schedule.every().day.at("03:00").do(lambda: backup.create_backup("daily"))
     schedule.every().monday.at("02:00").do(lambda: backup.create_backup("weekly"))
+    # Feedback aggregator: weekly performance learning loop (pre-plan Section 22)
+    try:
+        from feedback_aggregator import aggregate as feedback_aggregate
+        schedule.every().sunday.at("04:00").do(lambda: feedback_aggregate(CONFIG))
+        logger.info("Feedback aggregator scheduled (Sundays 04:00 UTC)")
+    except ImportError:
+        logger.debug("feedback_aggregator not available -- skipping")
     schedule.every(30).days.at("01:00").do(lambda: backup.create_backup("monthly"))
     logger.info("Scheduler ready — pipeline at 06:00 UTC")
     while True: schedule.run_pending(); time.sleep(30)

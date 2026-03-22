@@ -145,6 +145,76 @@ def pre_filter(articles: list[dict]) -> list[dict]:
     return filtered
 
 
+# ── Topic make/skip filter (pre-plan Section 5) ───────────────────────────
+# "Make these" topics: model releases with benchmarks, free tools, AI replacing
+# professions, regulation with outcomes, one tool explained.
+# "Skip these" topics: research papers without product outcomes, philosophy
+# without events, unverified breaking news, comparisons without winners.
+
+_SKIP_SIGNALS = [
+    "research paper",
+    "preprint",
+    "arxiv",
+    "benchmark improvement",
+    "is ai conscious",
+    "ai ethics debate",
+    "philosophy of ai",
+    "vs.*both good",
+    "both have strengths",
+    "rumor",
+    "unconfirmed",
+    "allegedly leaked",
+]
+
+_BOOST_SIGNALS = [
+    "free tool",
+    "free ai",
+    "open source",
+    "replaces",
+    "replaced by ai",
+    "layoffs",
+    "million tokens",
+    "billion parameters",
+    "outperforms",
+    "beats gpt",
+    "new model",
+    "launches",
+    "regulation",
+    "fines",
+    "banned",
+]
+
+
+def topic_filter(articles: list, config: dict = None) -> list:
+    """Apply pre-plan make/skip editorial filtering.
+
+    Boosts articles matching "make" signals and penalizes articles
+    matching "skip" signals. Does NOT remove articles -- adjusts their
+    heuristic scores so Claude scoring can make the final call.
+
+    Pre-plan: "The decision to cover a topic is not about whether it is
+    interesting. It is about whether it can be told in 45 seconds with
+    a clear hook, 3 facts, and a punchline."
+    """
+    import re
+    for a in articles:
+        combined = (a.get("title", "") + " " + a.get("summary", "")).lower()
+        boost = sum(1 for sig in _BOOST_SIGNALS if re.search(sig, combined))
+        penalty = sum(1 for sig in _SKIP_SIGNALS if re.search(sig, combined))
+        adjustment = (boost * 0.5) - (penalty * 1.0)
+        a["heuristic_score"] = max(0, min(10, a.get("heuristic_score", 5.0) + adjustment))
+        if penalty > 0:
+            a["_skip_signals"] = [s for s in _SKIP_SIGNALS if re.search(s, combined)]
+        if boost > 0:
+            a["_boost_signals"] = [s for s in _BOOST_SIGNALS if re.search(s, combined)]
+
+    skipped = sum(1 for a in articles if a.get("_skip_signals"))
+    boosted = sum(1 for a in articles if a.get("_boost_signals"))
+    if skipped or boosted:
+        logger.info(f"Topic filter: {boosted} boosted, {skipped} penalized")
+    return articles
+
+
 def score_article_heuristic(article: dict) -> float:
     """
     Fast heuristic score (0–10) before calling Claude.
@@ -304,6 +374,9 @@ async def run(config: "dict | None" = None, *, config_path: str = "code/config.j
         logger.warning("No AI articles found — falling back to backup topics")
         filtered = get_backup_articles()
 
+    # 3b. Topic make/skip filter (pre-plan Section 5)
+    filtered = topic_filter(filtered, config)
+
     # 4. Heuristic scoring
     for a in filtered:
         a["heuristic_score"] = score_article_heuristic(a)
@@ -317,8 +390,12 @@ async def run(config: "dict | None" = None, *, config_path: str = "code/config.j
     # 6. Final sort by Claude score
     top = sorted(scored, key=lambda x: x["claude_score"], reverse=True)[:5]
 
-    # 7. Write to queue
-    write_queue(top, config)
+    # 7. Write to queue (deprecated -- DB is the source of truth now.
+    #    JSON files kept temporarily for script_generator's queue reader.)
+    try:
+        write_queue(top, config)
+    except Exception as e:
+        logger.debug(f"Queue file write skipped ({e}) -- DB is primary store")
 
     logger.info(f"Aggregation complete. Top story: {top[0]['title'][:70]}")
     return top

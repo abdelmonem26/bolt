@@ -334,6 +334,32 @@ def run(config=None, *, config_path: str = "code/config.json") -> dict:
     except Exception as e:
         logger.warning(f"Publication metrics update failed: {e}")
 
+    # ── Retention monitoring (pre-plan Section 2) ────────────────────────
+    # Target: 70% viewer retention at 30s. Alert when below 50%.
+    try:
+        for platform, data in analytics.get("platforms", {}).items():
+            retention = data.get("avg_retention_30s", data.get("completion_rate", 0))
+            if retention and retention < 50:
+                logger.warning(
+                    f"Retention below 50% on {platform}: {retention:.1f}%",
+                    extra={"platform": platform, "retention_30s": retention},
+                )
+                try:
+                    from notifications import NotificationManager, Notification, NotificationLevel
+                    nm = NotificationManager(config)
+                    nm.send(Notification(
+                        title=f"Low retention on {platform}",
+                        message=f"Avg 30s retention: {retention:.1f}% (target: 70%, minimum: 50%)",
+                        level=NotificationLevel.WARNING,
+                        metadata={"platform": platform, "retention": retention},
+                    ))
+                except Exception:
+                    pass
+            elif retention and retention >= 70:
+                logger.info(f"Retention target met on {platform}: {retention:.1f}%")
+    except Exception as e:
+        logger.debug(f"Retention check skipped: {e}")
+
     logger.info(f"Analytics saved. Total views: {analytics['summary']['total_views_30d']:,}")
     return analytics
 

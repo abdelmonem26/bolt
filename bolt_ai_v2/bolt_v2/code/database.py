@@ -203,6 +203,12 @@ class BoltDB:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
+        # Run any pending migrations after initial schema
+        try:
+            from db_migrations import run_migrations
+            run_migrations(self.db_path)
+        except Exception as e:
+            logger.warning(f"Migration check failed (non-fatal): {e}")
         logger.info(f"Database ready: {self.db_path}")
 
     def _init_schema(self) -> None:
